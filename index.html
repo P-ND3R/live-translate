@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#111827">
+<title>Talk Translate</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg">
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,sans-serif;background:#111827;color:#f9fafb;height:100dvh;display:flex;flex-direction:column}
+  header{padding:12px 16px;display:flex;gap:8px;align-items:center}
+  select,input,button{font-size:18px;border-radius:12px;border:0;padding:12px}
+  select,input{background:#1f2937;color:#f9fafb}
+  button{background:#2563eb;color:#fff;font-weight:600}
+  #setup{flex:1;display:flex;flex-direction:column;justify-content:center;gap:16px;padding:16px}
+  #code{font-size:48px;text-align:center;letter-spacing:8px;font-weight:700}
+  #chat{flex:1;overflow-y:auto;padding:16px;display:none;flex-direction:column;gap:10px}
+  .msg{max-width:85%;padding:10px 14px;border-radius:16px;font-size:18px}
+  .me{align-self:flex-end;background:#2563eb}
+  .them{align-self:flex-start;background:#374151}
+  .orig{font-size:13px;opacity:.7;margin-top:4px}
+  #talk{display:none;margin:16px;height:120px;border-radius:60px;font-size:24px}
+  #talk.on{background:#dc2626}
+  #status{padding:0 16px;opacity:.7;font-size:14px;text-align:center}
+</style>
+</head>
+<body>
+<header>
+  <label for="lang">I speak</label>
+  <select id="lang" style="flex:1">
+    <option value="en-US">English</option><option value="es-ES">Español</option>
+    <option value="fr-FR">Français</option><option value="de-DE">Deutsch</option>
+    <option value="it-IT">Italiano</option><option value="pt-BR">Português</option>
+    <option value="zh-CN">中文</option><option value="ja-JP">日本語</option>
+    <option value="ko-KR">한국어</option><option value="ar-SA">العربية</option>
+    <option value="hi-IN">हिन्दी</option><option value="ru-RU">Русский</option>
+    <option value="vi-VN">Tiếng Việt</option><option value="tl-PH">Tagalog</option>
+  </select>
+</header>
+
+<div id="setup">
+  <button id="host">Start a conversation</button>
+  <div id="code"></div>
+  <div style="text-align:center;opacity:.6">— or —</div>
+  <input id="join" inputmode="numeric" maxlength="4" placeholder="Enter 4-digit code">
+  <button id="joinBtn">Join</button>
+</div>
+
+<div id="chat"></div>
+<div id="status"></div>
+<button id="talk">Hold to talk</button>
+
+<script>
+const $ = id => document.getElementById(id);
+const lang = () => $('lang').value;
+let peer, conn;
+
+function status(t){ $('status').textContent = t; }
+
+function connected(c){
+  conn = c;
+  conn.on('open', () => {
+    $('setup').style.display = 'none';
+    $('chat').style.display = 'flex';
+    $('talk').style.display = 'block';
+    status('Connected — hold the button and speak');
+  });
+  conn.on('data', async d => {
+    const text = await translate(d.text, d.lang, lang());
+    add(text, 'them', d.text);
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = lang();
+    speechSynthesis.speak(u);
+  });
+  conn.on('close', () => status('Disconnected — reload to reconnect'));
+}
+
+$('host').onclick = () => {
+  const code = String(Math.floor(1000 + Math.random() * 9000));
+  peer = new Peer('talktranslate-' + code);
+  peer.on('open', () => { $('code').textContent = code; status('Share this code with the other person'); });
+  peer.on('connection', connected);
+  peer.on('error', e => status('Error: ' + e.type));
+};
+
+$('joinBtn').onclick = () => {
+  const code = $('join').value.trim();
+  if (!/^\d{4}$/.test(code)) return status('Enter the 4-digit code');
+  peer = new Peer();
+  peer.on('open', () => connected(peer.connect('talktranslate-' + code)));
+  peer.on('error', e => status('Error: ' + e.type));
+};
+
+async function translate(text, from, to){
+  const f = from.split('-')[0], t = to.split('-')[0];
+  if (f === t) return text;
+  try {
+    const r = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${f}|${t}`);
+    const j = await r.json();
+    return j.responseData.translatedText || text;
+  } catch { return text; }
+}
+
+function add(text, who, orig){
+  const div = document.createElement('div');
+  div.className = 'msg ' + who;
+  div.textContent = text;
+  if (orig && orig !== text){
+    const o = document.createElement('div');
+    o.className = 'orig'; o.textContent = orig; div.appendChild(o);
+  }
+  $('chat').appendChild(div);
+  $('chat').scrollTop = 1e9;
+}
+
+// Speech recognition (Chrome on Android)
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec;
+function startTalk(e){
+  e.preventDefault();
+  if (!SR) return status('Speech recognition not supported — use Chrome');
+  rec = new SR();
+  rec.lang = lang();
+  rec.interimResults = false;
+  rec.onresult = ev => {
+    const text = ev.results[0][0].transcript;
+    add(text, 'me');
+    conn && conn.send({ text, lang: lang() });
+  };
+  rec.onerror = ev => status('Mic: ' + ev.error);
+  rec.start();
+  $('talk').classList.add('on'); $('talk').textContent = 'Listening…';
+}
+function stopTalk(){
+  rec && rec.stop();
+  $('talk').classList.remove('on'); $('talk').textContent = 'Hold to talk';
+}
+$('talk').addEventListener('pointerdown', startTalk);
+$('talk').addEventListener('pointerup', stopTalk);
+$('talk').addEventListener('pointerleave', stopTalk);
+</script>
+</body>
+</html>
