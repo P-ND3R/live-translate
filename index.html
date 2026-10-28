@@ -51,7 +51,11 @@
 
 <div id="chat"></div>
 <div id="status"></div>
-<button id="talk">Hold to talk</button>
+<select id="mode" style="display:none;margin:0 auto">
+  <option value="free">Hands-free</option>
+  <option value="push">Push to talk</option>
+</select>
+<button id="talk">Tap to start listening</button>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -66,14 +70,13 @@ function connected(c){
     $('setup').style.display = 'none';
     $('chat').style.display = 'flex';
     $('talk').style.display = 'block';
-    status('Connected — hold the button and speak');
+    $('mode').style.display = 'block';
+    status('Connected');
   });
   conn.on('data', async d => {
     const text = await translate(d.text, d.lang, lang());
     add(text, 'them', d.text);
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = lang();
-    speechSynthesis.speak(u);
+    say(text);
   });
   conn.on('close', () => status('Disconnected — reload to reconnect'));
 }
@@ -118,29 +121,64 @@ function add(text, who, orig){
 
 // Speech recognition (Chrome on Android)
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-let rec;
-function startTalk(e){
-  e.preventDefault();
+const handsFree = () => $('mode').value === 'free';
+let rec, wantMic = false, speaking = false;
+
+function startRec(){
   if (!SR) return status('Speech recognition not supported — use Chrome');
+  if (rec) return;
   rec = new SR();
   rec.lang = lang();
+  rec.continuous = handsFree();
   rec.interimResults = false;
   rec.onresult = ev => {
-    const text = ev.results[0][0].transcript;
-    add(text, 'me');
-    conn && conn.send({ text, lang: lang() });
+    for (let i = ev.resultIndex; i < ev.results.length; i++){
+      if (!ev.results[i].isFinal) continue;
+      const text = ev.results[i][0].transcript.trim();
+      if (!text) continue;
+      add(text, 'me');
+      conn && conn.send({ text, lang: lang() });
+    }
   };
-  rec.onerror = ev => status('Mic: ' + ev.error);
+  rec.onerror = ev => { if (ev.error !== 'no-speech' && ev.error !== 'aborted') status('Mic: ' + ev.error); };
+  // Android ends recognition after each pause; restart while hands-free is on
+  rec.onend = () => { rec = null; if (wantMic && handsFree() && !speaking) startRec(); };
   rec.start();
-  $('talk').classList.add('on'); $('talk').textContent = 'Listening…';
 }
-function stopTalk(){
-  rec && rec.stop();
-  $('talk').classList.remove('on'); $('talk').textContent = 'Hold to talk';
+function stopRec(){ if (rec){ const r = rec; rec = null; r.onend = null; r.stop(); } }
+
+function updateButton(){
+  const on = wantMic;
+  $('talk').classList.toggle('on', on);
+  $('talk').textContent = handsFree()
+    ? (on ? 'Listening… tap to pause' : 'Tap to start listening')
+    : (on ? 'Listening…' : 'Hold to talk');
 }
-$('talk').addEventListener('pointerdown', startTalk);
-$('talk').addEventListener('pointerup', stopTalk);
-$('talk').addEventListener('pointerleave', stopTalk);
+
+$('talk').addEventListener('pointerdown', e => {
+  e.preventDefault();
+  if (handsFree()){
+    wantMic = !wantMic;
+    wantMic && !speaking ? startRec() : stopRec();
+  } else {
+    wantMic = true; startRec();
+  }
+  updateButton();
+});
+const release = () => { if (!handsFree() && wantMic){ wantMic = false; rec && rec.stop(); updateButton(); } };
+$('talk').addEventListener('pointerup', release);
+$('talk').addEventListener('pointerleave', release);
+$('mode').onchange = () => { wantMic = false; stopRec(); updateButton(); };
+updateButton();
+
+// Pause the mic while reading a translation aloud so it doesn't hear itself
+function say(text){
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = lang();
+  u.onstart = () => { speaking = true; stopRec(); };
+  u.onend = u.onerror = () => { speaking = false; if (wantMic && handsFree()) startRec(); };
+  speechSynthesis.speak(u);
+}
 </script>
 </body>
 </html>
