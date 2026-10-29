@@ -331,13 +331,20 @@ async function loop(){
     await mic.ready();
     while (wantMic && !speaking){
       status('Listening…');
-      try { share(await mic.listenOnce()); }
-      catch (e) {
-        if (/permission|blocked/i.test(e.message)) throw e;
-        // "No match" / "No speech" just means silence — keep going
+      let pause = 150;
+      try {
+        const heard = await mic.listenOnce();
+        if (heard) share(heard);
+        else status('Didn’t catch that — keep talking');
+      } catch (e) {
+        const msg = (e && e.message) || String(e);
+        if (/permission|blocked/i.test(msg)) throw e;
+        // Silence is normal; anything else (busy, network, client error) is shown so it isn't a silent failure
+        if (/no match|no speech/i.test(msg)) status('Didn’t catch that — keep talking');
+        else { status('Phone speech error: ' + msg); pause = 1200; }
       }
       if (!handsFree()) { wantMic = false; break; }
-      await new Promise(r => setTimeout(r, 150));
+      await new Promise(r => setTimeout(r, pause));
     }
     status(speaking ? 'Speaking…' : (wantMic ? 'Listening…' : 'Mic off'));
   } catch (e) {
