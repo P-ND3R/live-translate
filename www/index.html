@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#111827">
+<title>Talk Translate</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg">
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,sans-serif;background:#111827;color:#f9fafb;height:100dvh;display:flex;flex-direction:column;padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)}
+  header{padding:12px 16px;display:flex;gap:8px;align-items:center}
+  header h1{flex:1;margin:0;font-size:20px}
+  select,input,button{font-size:18px;border-radius:12px;border:0;padding:12px}
+  select,input{background:#1f2937;color:#f9fafb}
+  button{background:#2563eb;color:#fff;font-weight:600}
+  button.plain{background:#1f2937}
+  #setup{flex:1;display:flex;flex-direction:column;justify-content:center;gap:16px;padding:16px}
+  #langNote{text-align:center;opacity:.7;font-size:15px}
+  #room{display:none;text-align:center;font-size:15px;opacity:.8}
+  #room b{font-size:22px;letter-spacing:4px}
+  #chat{flex:1;overflow-y:auto;padding:16px;display:none;flex-direction:column;gap:10px}
+  .msg{max-width:85%;padding:10px 14px;border-radius:16px;font-size:18px}
+  .me{align-self:flex-end;background:#2563eb}
+  .them{align-self:flex-start;background:#374151}
+  .orig{font-size:13px;opacity:.7;margin-top:4px}
+  #controls{display:none;flex-direction:column;gap:8px;padding:0 16px 16px}
+  #talk{height:110px;border-radius:55px;font-size:22px;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+  #talk.on{background:#dc2626}
+  #typeRow{display:flex;gap:8px}
+  #typeRow input{flex:1;min-width:0}
+  #status{padding:4px 16px;opacity:.75;font-size:14px;text-align:center;min-height:1.4em}
+  #live{padding:0 16px;font-style:italic;opacity:.6;text-align:center;min-height:1.2em}
+  #settings{display:none;position:fixed;inset:0;background:#111827;flex-direction:column;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom);overflow-y:auto}
+  #settings.open{display:flex}
+  .row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:16px;border-bottom:1px solid #1f2937}
+  .row label{font-size:17px}
+  .row small{display:block;opacity:.6;font-size:13px;margin-top:2px}
+  .row select{max-width:55%}
+  .row input[type=checkbox]{width:28px;height:28px;accent-color:#2563eb}
+  .row input[type=range]{width:45%;padding:0}
+</style>
+</head>
+<body>
+<header>
+  <h1>Talk Translate</h1>
+  <button id="openSettings" class="plain" aria-label="Settings">⚙︎</button>
+</header>
+
+<div id="setup">
+  <div id="langNote"></div>
+  <button id="host">Start a conversation</button>
+  <div style="text-align:center;opacity:.6">— or —</div>
+  <input id="join" inputmode="numeric" maxlength="6" placeholder="Enter 6-digit code">
+  <button id="joinBtn">Join</button>
+</div>
+
+<div id="room">Room code <b id="code"></b></div>
+<div id="chat"></div>
+<div id="live"></div>
+<div id="status"></div>
+<div id="controls">
+  <button id="talk">Tap to start listening</button>
+  <div id="typeRow">
+    <input id="typed" placeholder="…or type a message" enterkeyhint="send">
+    <button id="sendBtn">Send</button>
+  </div>
+</div>
+
+<div id="settings">
+  <header>
+    <h1>Settings</h1>
+    <button id="closeSettings">Done</button>
+  </header>
+  <div class="row">
+    <label for="lang">I speak</label>
+    <select id="lang">
+      <option value="en-US">English</option><option value="es-ES">Español</option>
+      <option value="fr-FR">Français</option><option value="de-DE">Deutsch</option>
+      <option value="it-IT">Italiano</option><option value="pt-BR">Português</option>
+      <option value="zh-CN">中文</option><option value="ja-JP">日本語</option>
+      <option value="ko-KR">한국어</option><option value="ar-SA">العربية</option>
+      <option value="hi-IN">हिन्दी</option><option value="ru-RU">Русский</option>
+      <option value="vi-VN">Tiếng Việt</option><option value="tl-PH">Tagalog</option>
+    </select>
+  </div>
+  <div class="row">
+    <label for="mode">Talking<small>Hands-free listens all the time</small></label>
+    <select id="mode">
+      <option value="free">Hands-free</option>
+      <option value="push">Push to talk</option>
+    </select>
+  </div>
+  <div class="row">
+    <label for="speak">Read translations aloud</label>
+    <input type="checkbox" id="speak">
+  </div>
+  <div class="row">
+    <label for="rate">Voice speed<small id="rateLabel"></small></label>
+    <input type="range" id="rate" min="0.5" max="1.5" step="0.1">
+  </div>
+  <div class="row">
+    <label for="showOrig">Show original words<small>Under each translated message</small></label>
+    <input type="checkbox" id="showOrig">
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+// Settings, saved on this device
+const defaults = { lang: 'en-US', mode: 'free', speak: true, rate: 1, showOrig: true };
+let settings = { ...defaults };
+try { Object.assign(settings, JSON.parse(localStorage.getItem('tt-settings') || '{}')); } catch {}
+const saveSettings = () => { try { localStorage.setItem('tt-settings', JSON.stringify(settings)); } catch {} };
+const lang = () => settings.lang;
+const handsFree = () => settings.mode === 'free';
+
+function renderSettings(){
+  $('lang').value = settings.lang;
+  $('mode').value = settings.mode;
+  $('speak').checked = settings.speak;
+  $('rate').value = settings.rate;
+  $('rateLabel').textContent = settings.rate.toFixed(1) + '×';
+  $('showOrig').checked = settings.showOrig;
+  $('langNote').textContent = 'You speak ' + $('lang').selectedOptions[0].text + ' · change in ⚙︎';
+  document.body.classList.toggle('hideOrig', !settings.showOrig);
+}
+$('lang').onchange = e => { settings.lang = e.target.value; saveSettings(); renderSettings(); };
+$('mode').onchange = e => { settings.mode = e.target.value; saveSettings(); micOff(); };
+$('speak').onchange = e => { settings.speak = e.target.checked; saveSettings(); };
+$('rate').oninput = e => { settings.rate = +e.target.value; saveSettings(); renderSettings(); };
+$('showOrig').onchange = e => { settings.showOrig = e.target.checked; saveSettings(); renderSettings(); };
+$('openSettings').onclick = () => { micOff(); $('settings').classList.add('open'); };
+$('closeSettings').onclick = () => $('settings').classList.remove('open');
+document.head.insertAdjacentHTML('beforeend', '<style>body.hideOrig .orig{display:none}</style>');
+renderSettings();
+
+const me = Math.random().toString(36).slice(2);
+const RELAY = 'https://ntfy.sh/';
+let topic, events, greeted = false;
+
+function status(t){ $('status').textContent = t; }
+
+// Messages go through the ntfy.sh relay, which works on any network (no direct phone-to-phone link)
+function enterRoom(code){
+  topic = 'talktranslate-v2-' + code;
+  $('setup').style.display = 'none';
+  $('room').style.display = 'block';
+  $('code').textContent = code;
+  $('chat').style.display = 'flex';
+  $('controls').style.display = 'flex';
+  status('Waiting for the other person to join…');
+  listen();
+  send({ type: 'hello' });
+}
+
+function listen(){
+  events = new EventSource(RELAY + topic + '/sse');
+  events.onmessage = e => {
+    let m;
+    try { m = JSON.parse(JSON.parse(e.data).message); } catch { return; }
+    if (!m || m.from === me) return;
+    if (m.type === 'hello'){
+      status('Connected');
+      if (!greeted){ greeted = true; send({ type: 'hello' }); }
+    } else if (m.type === 'text'){
+      status('Connected');
+      receive(m);
+    }
+  };
+  events.onerror = () => status('Reconnecting…');
+}
+
+function send(m){
+  m.from = me;
+  return fetch(RELAY + topic, { method: 'POST', body: JSON.stringify(m) })
+    .catch(() => status('Could not send — check your internet'));
+}
+
+async function receive(m){
+  const text = await translate(m.text, m.lang, lang());
+  add(text, 'them', m.text);
+  if (settings.speak) say(text);
+}
+
+function share(text){
+  text = (text || '').trim();
+  if (!text) return;
+  add(text, 'me');
+  send({ type: 'text', text, lang: lang() });
+}
+
+$('host').onclick = () => enterRoom(String(Math.floor(100000 + Math.random() * 900000)));
+$('joinBtn').onclick = () => {
+  const code = $('join').value.trim();
+  if (!/^\d{6}$/.test(code)) return status('Enter the 6-digit code');
+  enterRoom(code);
+};
+$('sendBtn').onclick = () => { share($('typed').value); $('typed').value = ''; };
+$('typed').onkeydown = e => { if (e.key === 'Enter') $('sendBtn').click(); };
+
+async function translate(text, from, to){
+  const f = from.split('-')[0], t = to.split('-')[0];
+  if (f === t) return text;
+  try {
+    const r = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${f}|${t}`);
+    const j = await r.json();
+    return j.responseData.translatedText || text;
+  } catch { return text; }
+}
+
+function add(text, who, orig){
+  const div = document.createElement('div');
+  div.className = 'msg ' + who;
+  div.textContent = text;
+  if (orig && orig !== text){
+    const o = document.createElement('div');
+    o.className = 'orig'; o.textContent = orig; div.appendChild(o);
+  }
+  $('chat').appendChild(div);
+  $('chat').scrollTop = 1e9;
+}
+
+// Speech: in the Android app use the phone's own recognizer and voice through Capacitor;
+// in a browser fall back to the Web Speech API.
+const cap = window.Capacitor;
+const native = !!(cap && cap.isNativePlatform && cap.isNativePlatform());
+const call = (plugin, method, opts = {}) => cap.nativePromise(plugin, method, opts);
+let wantMic = false, speaking = false, busy = false;
+
+const nativeMic = {
+  async ready(){
+    const p = await call('SpeechRecognition', 'requestPermissions');
+    if (p.speechRecognition !== 'granted') throw new Error('blocked');
+  },
+  // Resolves with what was said once the speaker pauses (or stop() is called)
+  async listenOnce(){
+    const r = await call('SpeechRecognition', 'start', { language: lang(), maxResults: 1, partialResults: false, popup: false });
+    return (r.matches || [])[0] || '';
+  },
+  stop(){ return call('SpeechRecognition', 'stop').catch(() => {}); }
+};
+
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let webRec;
+const webMic = {
+  async ready(){ if (!SR) throw new Error('unsupported'); },
+  listenOnce(){
+    return new Promise((resolve, reject) => {
+      let heard = '';
+      const r = webRec = new SR();
+      r.lang = lang(); r.continuous = false; r.interimResults = true;
+      r.onresult = ev => {
+        heard = [...ev.results].map(x => x[0].transcript).join('');
+        $('live').textContent = heard;
+      };
+      r.onerror = ev => { if (ev.error === 'not-allowed') reject(new Error('blocked')); };
+      r.onend = () => { webRec = null; $('live').textContent = ''; resolve(heard); };
+      r.start();
+    });
+  },
+  stop(){ webRec && webRec.stop(); }
+};
+const mic = native ? nativeMic : webMic;
+
+// Hands-free keeps listening phrase after phrase; push-to-talk listens once per press
+async function loop(){
+  if (busy) return;
+  busy = true;
+  try {
+    await mic.ready();
+    while (wantMic && !speaking){
+      status('Listening…');
+      try { share(await mic.listenOnce()); }
+      catch (e) {
+        if (/permission|blocked/i.test(e.message)) throw e;
+        // "No match" / "No speech" just means silence — keep going
+      }
+      if (!handsFree()) { wantMic = false; break; }
+      await new Promise(r => setTimeout(r, 150));
+    }
+    status(speaking ? 'Speaking…' : (wantMic ? 'Listening…' : 'Mic off'));
+  } catch (e) {
+    wantMic = false;
+    status(/unsupported/.test(e.message)
+      ? 'Voice not supported here — type below, or use the Android app'
+      : 'Microphone blocked — allow it in your phone settings');
+  } finally {
+    busy = false;
+    updateButton();
+    // A translation may have finished playing while this loop was winding down
+    if (wantMic && handsFree() && !speaking) setTimeout(loop, 150);
+  }
+}
+
+function micOff(){ wantMic = false; mic.stop(); updateButton(); }
+
+function updateButton(){
+  $('talk').classList.toggle('on', wantMic);
+  $('talk').textContent = handsFree()
+    ? (wantMic ? 'Listening — tap to stop' : 'Tap to start listening')
+    : (wantMic ? 'Listening…' : 'Hold to talk');
+}
+
+$('talk').addEventListener('pointerdown', e => {
+  e.preventDefault();
+  if (handsFree()){
+    wantMic = !wantMic;
+    wantMic ? loop() : mic.stop();
+  } else {
+    wantMic = true; loop();
+  }
+  updateButton();
+});
+// Releasing in push-to-talk stops the recognizer, which then hands back what it heard
+const release = () => { if (!handsFree() && wantMic){ mic.stop(); } };
+$('talk').addEventListener('pointerup', release);
+$('talk').addEventListener('pointercancel', release);
+$('talk').addEventListener('contextmenu', e => e.preventDefault());
+updateButton();
+
+// Pause the mic while reading a translation aloud so it doesn't hear itself
+async function say(text){
+  speaking = true;
+  mic.stop();
+  try {
+    if (native) await call('TextToSpeech', 'speak', { text, lang: lang(), rate: settings.rate });
+    else await new Promise(resolve => {
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = lang(); u.rate = settings.rate;
+      u.onend = u.onerror = resolve;
+      speechSynthesis.speak(u);
+      setTimeout(resolve, 2000 + text.length * 90); // some browsers never fire onend
+    });
+  } catch {}
+  speaking = false;
+  if (wantMic && handsFree()) loop();
+}
+</script>
+</body>
+</html>
