@@ -7,6 +7,7 @@
 <title>Talk Translate</title>
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon.svg">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <style>
   *{box-sizing:border-box}
   body{margin:0;font-family:system-ui,sans-serif;background:#111827;color:#f9fafb;height:100dvh;display:flex;flex-direction:column;padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)}
@@ -45,6 +46,7 @@
 <body>
 <header>
   <h1>Talk Translate</h1>
+  <button id="voiceToggle" class="plain" aria-label="Voice on or off"></button>
   <button id="openSettings" class="plain" aria-label="Settings">⚙︎</button>
 </header>
 
@@ -56,7 +58,14 @@
   <button id="joinBtn">Join</button>
 </div>
 
-<div id="room">Room code <b id="code"></b></div>
+<div id="room">Room code <b id="code"></b>
+  <button id="showPhone" class="plain" style="display:block;margin:8px auto 0;font-size:15px;padding:8px 14px">📱 Show on my phone</button>
+</div>
+<div id="pairBox" style="display:none;text-align:center;padding:8px 16px">
+  <div style="font-size:15px;opacity:.8;margin-bottom:8px">Scan with your phone's camera, or open this link on it:</div>
+  <div id="qr" style="display:inline-block;background:#fff;padding:10px;border-radius:12px"></div>
+  <div><a id="pairLink" style="color:#93c5fd;word-break:break-all;font-size:14px"></a></div>
+</div>
 <div id="chat"></div>
 <div id="live"></div>
 <div id="status"></div>
@@ -129,11 +138,16 @@ function renderSettings(){
   $('rateLabel').textContent = settings.rate.toFixed(1) + '×';
   $('showOrig').checked = settings.showOrig;
   $('langNote').textContent = 'You speak ' + $('lang').selectedOptions[0].text + ' · change in ⚙︎';
+  $('voiceToggle').textContent = settings.speak ? '🔊' : '🔇';
   document.body.classList.toggle('hideOrig', !settings.showOrig);
 }
 $('lang').onchange = e => { settings.lang = e.target.value; saveSettings(); renderSettings(); };
 $('mode').onchange = e => { settings.mode = e.target.value; saveSettings(); micOff(); };
-$('speak').onchange = e => { settings.speak = e.target.checked; saveSettings(); };
+$('speak').onchange = e => { settings.speak = e.target.checked; saveSettings(); renderSettings(); };
+$('voiceToggle').onclick = () => {
+  settings.speak = !settings.speak; saveSettings(); renderSettings();
+  if (!settings.speak) stopVoice();
+};
 $('rate').oninput = e => { settings.rate = +e.target.value; saveSettings(); renderSettings(); };
 $('showOrig').onchange = e => { settings.showOrig = e.target.checked; saveSettings(); renderSettings(); };
 $('openSettings').onclick = () => { micOff(); $('settings').classList.add('open'); };
@@ -143,22 +157,47 @@ renderSettings();
 
 const me = Math.random().toString(36).slice(2);
 const RELAY = 'https://ntfy.sh/';
-let topic, events, greeted = false;
+const SITE = 'https://p-nd3r.github.io/live-translate/';
+let topic, roomCode, events, greeted = false;
+
+// A phone opened from "Show on my phone" mirrors one computer: it shows that computer's
+// words as its own and reads the other person's translations aloud, without using its mic.
+const params = new URLSearchParams(location.search);
+const pair = params.get('pair');
+if (pair && params.get('lang')){ settings.lang = params.get('lang'); saveSettings(); renderSettings(); }
 
 function status(t){ $('status').textContent = t; }
 
 // Messages go through the ntfy.sh relay, which works on any network (no direct phone-to-phone link)
 function enterRoom(code){
+  roomCode = code;
   topic = 'talktranslate-v2-' + code;
   $('setup').style.display = 'none';
   $('room').style.display = 'block';
   $('code').textContent = code;
   $('chat').style.display = 'flex';
   $('controls').style.display = 'flex';
-  status('Waiting for the other person to join…');
   listen();
-  send({ type: 'hello' });
+  if (pair){
+    $('showPhone').style.display = 'none';
+    status('Showing your computer’s conversation');
+    // Phone browsers only allow speech after a tap, so the big button unlocks sound once
+    const unlock = $('talk').cloneNode(false);
+    unlock.id = 'unlock'; unlock.textContent = '🔊 Tap to turn on sound';
+    $('talk').replaceWith(unlock);
+    unlock.onclick = () => {
+      try { speechSynthesis.speak(new SpeechSynthesisUtterance(' ')); } catch {}
+      settings.speak = true; saveSettings(); renderSettings();
+      unlock.remove();
+    };
+  } else {
+    status('Waiting for the other person to join…');
+    send({ type: 'hello' });
+  }
 }
+
+// Is this message from my side of the conversation (me, my computer, or my phone)?
+const mine = m => m.from === me || (pair && m.from === pair) || m.pair === me;
 
 function listen(){
   events = new EventSource(RELAY + topic + '/sse');
@@ -167,11 +206,13 @@ function listen(){
     try { m = JSON.parse(JSON.parse(e.data).message); } catch { return; }
     if (!m || m.from === me) return;
     if (m.type === 'hello'){
+      if (pair) return;
       status('Connected');
       if (!greeted){ greeted = true; send({ type: 'hello' }); }
     } else if (m.type === 'text'){
-      status('Connected');
-      receive(m);
+      if (!pair) status('Connected');
+      if (mine(m)) add(m.text, 'me');
+      else receive(m);
     }
   };
   events.onerror = () => status('Reconnecting…');
@@ -179,9 +220,21 @@ function listen(){
 
 function send(m){
   m.from = me;
+  if (pair) m.pair = pair;
   return fetch(RELAY + topic, { method: 'POST', body: JSON.stringify(m) })
     .catch(() => status('Could not send — check your internet'));
 }
+
+$('showPhone').onclick = () => {
+  const box = $('pairBox');
+  if (box.style.display === 'block'){ box.style.display = 'none'; return; }
+  const url = SITE + '?room=' + roomCode + '&pair=' + me + '&lang=' + encodeURIComponent(lang());
+  $('pairLink').textContent = url; $('pairLink').href = url;
+  $('qr').innerHTML = '';
+  if (window.QRCode) new QRCode($('qr'), { text: url, width: 200, height: 200 });
+  else $('qr').style.display = 'none';
+  box.style.display = 'block';
+};
 
 async function receive(m){
   const text = await translate(m.text, m.lang, lang());
@@ -303,6 +356,7 @@ async function loop(){
 function micOff(){ wantMic = false; mic.stop(); updateButton(); }
 
 function updateButton(){
+  if (!$('talk')) return; // phone view has no talk button
   $('talk').classList.toggle('on', wantMic);
   $('talk').textContent = handsFree()
     ? (wantMic ? 'Listening — tap to stop' : 'Tap to start listening')
@@ -326,6 +380,11 @@ $('talk').addEventListener('pointercancel', release);
 $('talk').addEventListener('contextmenu', e => e.preventDefault());
 updateButton();
 
+function stopVoice(){
+  if (native) call('TextToSpeech', 'stop').catch(() => {});
+  else speechSynthesis.cancel();
+}
+
 // Pause the mic while reading a translation aloud so it doesn't hear itself
 async function say(text){
   speaking = true;
@@ -343,6 +402,9 @@ async function say(text){
   speaking = false;
   if (wantMic && handsFree()) loop();
 }
+
+// Opened from a 'Show on my phone' link or QR code: go straight into the room
+if (/^\d{6}$/.test(params.get('room') || '')) enterRoom(params.get('room'));
 </script>
 </body>
 </html>
