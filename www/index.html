@@ -102,8 +102,20 @@
     </select>
   </div>
   <div class="row">
-    <label for="speak">Read translations aloud</label>
+    <label for="speak">Voice on<small>Read translations out loud (also the 🔊 button)</small></label>
     <input type="checkbox" id="speak">
+  </div>
+  <div class="row">
+    <label for="gender">Voice<small>Auto: Spanish = male, English = female</small></label>
+    <select id="gender">
+      <option value="auto">Auto</option>
+      <option value="male">Male</option>
+      <option value="female">Female</option>
+    </select>
+  </div>
+  <div class="row">
+    <label>Hear the voice</label>
+    <button id="testVoice" class="plain">▶ Test</button>
   </div>
   <div class="row">
     <label for="rate">Voice speed<small id="rateLabel"></small></label>
@@ -123,7 +135,7 @@
 const $ = id => document.getElementById(id);
 
 // Settings, saved on this device
-const defaults = { lang: 'en-US', mode: 'free', speak: true, rate: 1, showOrig: true };
+const defaults = { lang: 'en-US', mode: 'free', speak: true, gender: 'auto', rate: 1, showOrig: true };
 let settings = { ...defaults };
 try { Object.assign(settings, JSON.parse(localStorage.getItem('tt-settings') || '{}')); } catch {}
 const saveSettings = () => { try { localStorage.setItem('tt-settings', JSON.stringify(settings)); } catch {} };
@@ -134,6 +146,7 @@ function renderSettings(){
   $('lang').value = settings.lang;
   $('mode').value = settings.mode;
   $('speak').checked = settings.speak;
+  $('gender').value = settings.gender;
   $('rate').value = settings.rate;
   $('rateLabel').textContent = settings.rate.toFixed(1) + '×';
   $('showOrig').checked = settings.showOrig;
@@ -144,6 +157,8 @@ function renderSettings(){
 $('lang').onchange = e => { settings.lang = e.target.value; saveSettings(); renderSettings(); };
 $('mode').onchange = e => { settings.mode = e.target.value; saveSettings(); micOff(); };
 $('speak').onchange = e => { settings.speak = e.target.checked; saveSettings(); renderSettings(); };
+$('gender').onchange = e => { settings.gender = e.target.value; saveSettings(); };
+$('testVoice').onclick = () => say({ en: 'Hello, this is how translations will sound.', es: 'Hola, así sonarán las traducciones.' }[lang().split('-')[0]] || 'Hello, this is how translations will sound.');
 $('voiceToggle').onclick = () => {
   settings.speak = !settings.speak; saveSettings(); renderSettings();
   if (!settings.speak) stopVoice();
@@ -392,15 +407,48 @@ function stopVoice(){
   else speechSynthesis.cancel();
 }
 
+// Voices don't report gender, so match on known voice names (desktop/Chrome and Google's Android voice codes)
+const FEMALE = /female|woman|zira|aria|jenny|samantha|victoria|karen|moira|tessa|fiona|susan|hazel|libby|sonia|helena|laura|elvira|monica|paulina|sabina|dalia|lucia|google español|google us english|x-eea|x-eec|x-esc|x-sfb|x-iob|x-iog|x-sfg|x-tpc|x-tpf|x-gba|x-gbc|x-gbg/i;
+const MALE = /\bmale\b|\bman\b|david|mark|guy|ryan|daniel|alex|fred|george|james|jorge|pablo|raul|diego|alvaro|tomas|juan|x-eed|x-eef|x-esd|x-iol|x-iom|x-tpd|x-gbb|x-gbd|x-rjs/i;
+const genderOf = name => FEMALE.test(name) ? 'female' : MALE.test(name) ? 'male' : null;
+function wantedGender(){
+  if (settings.gender !== 'auto') return settings.gender;
+  return lang().startsWith('es') ? 'male' : 'female';
+}
+// Best voice for my language and the wanted gender: same region first, then same language
+function pickVoice(voices, nameOf){
+  const [l, region] = lang().toLowerCase().split('-');
+  const g = wantedGender();
+  const ok = v => (v.lang || '').toLowerCase().replace('_', '-').startsWith(l);
+  const sameRegion = v => (v.lang || '').toLowerCase().replace('_', '-') === l + '-' + region;
+  const pool = voices.filter(ok).filter(v => genderOf(nameOf(v)) === g);
+  return pool.find(sameRegion) || pool[0] || null;
+}
+// No voice of that gender installed: shift the pitch so it still sounds male or female
+const fallbackPitch = () => wantedGender() === 'male' ? 0.6 : 1.3;
+
+let nativeVoices;
+async function nativeSpeakOptions(text){
+  if (!nativeVoices){
+    try { nativeVoices = (await call('TextToSpeech', 'getSupportedVoices')).voices || []; } catch { nativeVoices = []; }
+  }
+  const v = pickVoice(nativeVoices, v => v.voiceURI + ' ' + v.name);
+  const opts = { text, lang: lang(), rate: settings.rate, pitch: v ? 1 : fallbackPitch() };
+  if (v) opts.voice = nativeVoices.indexOf(v);
+  return opts;
+}
+
 // Pause the mic while reading a translation aloud so it doesn't hear itself
 async function say(text){
   speaking = true;
   mic.stop();
   try {
-    if (native) await call('TextToSpeech', 'speak', { text, lang: lang(), rate: settings.rate });
+    if (native) await call('TextToSpeech', 'speak', await nativeSpeakOptions(text));
     else await new Promise(resolve => {
       const u = new SpeechSynthesisUtterance(text);
       u.lang = lang(); u.rate = settings.rate;
+      const v = pickVoice(speechSynthesis.getVoices(), v => v.name + ' ' + v.voiceURI);
+      if (v) u.voice = v; else u.pitch = fallbackPitch();
       u.onend = u.onerror = resolve;
       speechSynthesis.speak(u);
       setTimeout(resolve, 2000 + text.length * 90); // some browsers never fire onend
