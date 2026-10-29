@@ -104,6 +104,10 @@
     <label for="showOrig">Show original words<small>Under each translated message</small></label>
     <input type="checkbox" id="showOrig">
   </div>
+  <div class="row" id="downloadRow">
+    <label>Android app<small>Install for the most reliable voice pickup</small></label>
+    <a id="download" href="talk-translate.apk" download="talk-translate.apk"><button tabindex="-1">Download</button></a>
+  </div>
 </div>
 
 <script>
@@ -264,6 +268,7 @@ const webMic = {
   stop(){ webRec && webRec.stop(); }
 };
 const mic = native ? nativeMic : webMic;
+if (native) $('downloadRow').style.display = 'none'; // already in the app
 
 // Hands-free keeps listening phrase after phrase; push-to-talk listens once per press
 async function loop(){

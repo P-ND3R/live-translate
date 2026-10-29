@@ -1,7 +1,7 @@
 {
   "name": "Talk Translate",
   "short_name": "Translate",
-  "start_url": "/",
+  "start_url": "./",
   "display": "standalone",
   "background_color": "#111827",
   "theme_color": "#111827",
